@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"debug/elf"
@@ -2900,6 +2902,66 @@ reverse -d /path/to/binary
 	},
 }
 
+// detectAndDecompress checks if the decrypted data is compressed and decompresses it
+func detectAndDecompress(data []byte, filename string) ([]byte, error) {
+	if len(data) < 2 {
+		return data, nil
+	}
+
+	// Check for gzip magic number (0x1F 0x8B)
+	if data[0] == 0x1f && data[1] == 0x8b {
+		slog.Debug("Detected gzip compression", "file", filename)
+		reader, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("gzip reader creation failed: %v", err)
+		}
+		defer reader.Close()
+		
+		decompressed, err := io.ReadAll(reader)
+		if err != nil {
+			return nil, fmt.Errorf("gzip decompression failed: %v", err)
+		}
+		slog.Debug("Gzip decompression successful", "file", filename, 
+			"original_size", len(data), "decompressed_size", len(decompressed))
+		return decompressed, nil
+	}
+
+	// Check for ZIP archive (PK signature: 0x50 0x4B)
+	if len(data) >= 4 && data[0] == 0x50 && data[1] == 0x4B {
+		slog.Debug("Detected ZIP archive", "file", filename)
+		reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+		if err != nil {
+			return nil, fmt.Errorf("zip reader creation failed: %v", err)
+		}
+		
+		if len(reader.File) == 0 {
+			return nil, fmt.Errorf("zip archive is empty")
+		}
+		
+		// For simplicity, extract the first file
+		// In a real scenario, you might want to handle multiple files differently
+		file := reader.File[0]
+		rc, err := file.Open()
+		if err != nil {
+			return nil, fmt.Errorf("failed to open file in zip: %v", err)
+		}
+		defer rc.Close()
+		
+		decompressed, err := io.ReadAll(rc)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read file from zip: %v", err)
+		}
+		
+		slog.Debug("ZIP decompression successful", "file", filename, 
+			"archive_file", file.Name,
+			"original_size", len(data), "decompressed_size", len(decompressed))
+		return decompressed, nil
+	}
+
+	// No compression detected, return as-is
+	return data, nil
+}
+
 // runDecrypt handles decryption of a file using XXTEA
 func runDecrypt(filepath string, key string, signature string, writeFile bool) error {
 	// Read the encrypted file
@@ -2934,6 +2996,12 @@ func runDecrypt(filepath string, key string, signature string, writeFile bool) e
 		if err != nil {
 			return fmt.Errorf("decryption failed: %v", err)
 		}
+	}
+
+	// Check for and handle compression
+	decrypted, err = detectAndDecompress(decrypted, filepath)
+	if err != nil {
+		return fmt.Errorf("decompression failed: %v", err)
 	}
 
 	// Handle output
