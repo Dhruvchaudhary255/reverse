@@ -1,4 +1,4 @@
-Set FontSize 14
+Set FontSize 16
 Set Height 1300
 Set Width 1300
 Set Shell zsh
@@ -45,15 +45,15 @@ Sleep 2.5s
 Type "q"
 Sleep 1s
 Type "q"
-Sleep 1s
+Sleep 2s
 Type "q"
-Sleep 1s
+Sleep 2s
 Type "q"
-Sleep 1.5s
+Sleep 2.5s
 Type "q"
 Sleep 500ms
 Type "q"
-Sleep 1s
+Sleep 2s
 Type "q"
 Sleep 500ms
 Type "q"
