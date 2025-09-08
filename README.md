@@ -12,7 +12,7 @@ It works by:
 
 In short: run `./reverse` on a target binary, and it will trace through symbolized functions, resolve indirect/virtual calls, reconstruct `std::string` arguments, and highlight where and how XXTEA keys are set. This dramatically shortens the time needed to locate and recover encryption keys in obfuscated mobile games.
 
-Thanks to Taha Draidia for help and feedback getting this proof of concept on the ground.
+Special thanks to Taha Draidia for the guidance and feedback that made this proof-of-concept possible.
 
 ## Demo
 
