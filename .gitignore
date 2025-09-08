@@ -1,0 +1,31 @@
+# Sample files
+samples/
+
+# Binaries  
+/reverse
+*.exe
+*.dll
+*.dylib
+
+# Build artifacts
+*.o
+*.a
+
+# Test artifacts
+*.test
+coverage.out
+
+# IDE
+.claude/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+cpu.prof
+.vscode/
+cpu.prof
