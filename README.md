@@ -72,7 +72,7 @@ Decrypt all files with a specific signature:
 ```bash
 ./reverse --find-signature "sig" assets/ | \
   while read f; do
-    ./reverse --decrypt --key "key" --signature "sig" -w "assets/$f"
+    ./reverse --decrypt --key "key" --signature "sig" -w "$f"
   done
 ```
 

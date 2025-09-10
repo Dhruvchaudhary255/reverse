@@ -2811,13 +2811,7 @@ reverse -d /path/to/binary
 				recursive, _ = cmd.Flags().GetBool("recursive")
 			}
 			
-			// Get absolute path for directory
-			absDirPath, err := pathpkg.Abs(dirPath)
-			if err != nil {
-				return fmt.Errorf("failed to resolve path: %v", err)
-			}
-			
-			return runFindSignature(absDirPath, signature, recursive)
+			return runFindSignature(dirPath, signature, recursive)
 		}
 
 		// For all other modes, we need exactly one file argument
@@ -3123,12 +3117,7 @@ func runFindSignature(dirPath string, signature string, recursive bool) error {
 	
 	// Output results (just list files like 'find' command)
 	for _, file := range foundFiles {
-		// Show relative path if possible
-		relPath, err := pathpkg.Rel(dirPath, file)
-		if err != nil {
-			relPath = file
-		}
-		fmt.Println(relPath)
+		fmt.Println(file)
 	}
 	
 	return nil
