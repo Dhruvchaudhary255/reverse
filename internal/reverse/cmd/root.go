@@ -2741,8 +2741,9 @@ func init() {
 	rootCmd.Flags().String("cpuprofile", "", "Write CPU profile to file")
 	rootCmd.Flags().String("memprofile", "", "Write memory profile to file")
 	rootCmd.Flags().Bool("decrypt", false, "Decrypt a file using XXTEA with --key and --signature")
-	rootCmd.Flags().String("key", "", "XXTEA encryption key for decryption")
-	rootCmd.Flags().String("signature", "", "XXTEA signature for decryption")
+	rootCmd.Flags().Bool("encrypt", false, "Encrypt a file using XXTEA with --key and optional --signature")
+	rootCmd.Flags().String("key", "", "XXTEA encryption key")
+	rootCmd.Flags().String("signature", "", "XXTEA signature (prepended to encrypted data)")
 	rootCmd.Flags().BoolP("write", "w", false, "Write decrypted output to file (.lua for .luac, .js for .jsc)")
 	rootCmd.Flags().Bool("find-signature", false, "Find all files in directory with given signature")
 	rootCmd.Flags().BoolP("recursive", "r", false, "Search recursively in subdirectories")
@@ -2840,6 +2841,12 @@ reverse -d /path/to/binary
 		showFull, _ := cmd.Flags().GetBool("full")
 		jsonOutput, _ := cmd.Flags().GetBool("json")
 		decrypt, _ := cmd.Flags().GetBool("decrypt")
+		encrypt, _ := cmd.Flags().GetBool("encrypt")
+		
+		// Check for conflicting flags
+		if decrypt && encrypt {
+			return fmt.Errorf("cannot use --decrypt and --encrypt together")
+		}
 		
 		// --full implies --no-tui
 		if showFull {
@@ -2880,6 +2887,19 @@ reverse -d /path/to/binary
 			}
 			
 			return runDecrypt(absPath, key, signature, writeFile)
+		}
+		
+		// Handle encryption mode
+		if encrypt {
+			key, _ := cmd.Flags().GetString("key")
+			signature, _ := cmd.Flags().GetString("signature")
+			writeFile, _ := cmd.Flags().GetBool("write")
+			
+			if key == "" {
+				return fmt.Errorf("--key is required when using --encrypt")
+			}
+			
+			return runEncrypt(absPath, key, signature, writeFile)
 		}
 
 		if jsonOutput {
@@ -3040,6 +3060,64 @@ func runDecrypt(filepath string, key string, signature string, writeFile bool) e
 	} else {
 		// Output to stdout
 		_, err = os.Stdout.Write(decrypted)
+		if err != nil {
+			return fmt.Errorf("failed to write output: %v", err)
+		}
+	}
+
+	return nil
+}
+
+// runEncrypt encrypts a file using XXTEA with optional signature
+func runEncrypt(filepath string, key string, signature string, writeFile bool) error {
+	// Read the input file
+	data, err := os.ReadFile(filepath)
+	if err != nil {
+		return fmt.Errorf("failed to read file: %v", err)
+	}
+
+	// Encrypt the data
+	encrypted, err := xxtea.Encrypt(data, []byte(key))
+	if err != nil {
+		return fmt.Errorf("encryption failed: %v", err)
+	}
+
+	// Prepend signature if provided
+	var output []byte
+	if signature != "" {
+		sigBytes := []byte(signature)
+		output = append(sigBytes, encrypted...)
+	} else {
+		output = encrypted
+	}
+
+	// Handle output
+	if writeFile {
+		// Determine output filename based on input extension
+		dir := pathpkg.Dir(filepath)
+		filename := pathpkg.Base(filepath)
+		ext := pathpkg.Ext(filename)
+		base := strings.TrimSuffix(filename, ext)
+		
+		var outputPath string
+		switch strings.ToLower(ext) {
+		case ".lua":
+			outputPath = pathpkg.Join(dir, base+".luac")
+		case ".js":
+			outputPath = pathpkg.Join(dir, base+".jsc")
+		default:
+			outputPath = pathpkg.Join(dir, filename+".encrypted")
+		}
+		
+		err = os.WriteFile(outputPath, output, 0644)
+		if err != nil {
+			return fmt.Errorf("failed to write file: %v", err)
+		}
+		fmt.Fprintf(os.Stderr, "Successfully encrypted: %s\n", filepath)
+		fmt.Fprintf(os.Stderr, "Output written to: %s\n", outputPath)
+	} else {
+		// Output to stdout
+		_, err = os.Stdout.Write(output)
 		if err != nil {
 			return fmt.Errorf("failed to write output: %v", err)
 		}

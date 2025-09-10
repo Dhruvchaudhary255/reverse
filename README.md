@@ -41,6 +41,35 @@ JSON output for scripting
 ./reverse libcocos2djs.so --json
 ```
 
+## Encryption and Decryption
+
+### Encrypt files
+
+Encrypt a file with XXTEA:
+```bash
+./reverse --encrypt --key "mykey" file.lua
+```
+
+Encrypt with a signature (prepended to encrypted data):
+```bash
+./reverse --encrypt --key "mykey" --signature "SIG" file.lua
+```
+
+Write encrypted output to file:
+```bash
+./reverse --encrypt --key "mykey" --signature "SIG" -w file.lua
+# Creates file.luac (for .lua files)
+# Creates file.jsc (for .js files)
+# Creates file.encrypted (for other files)
+```
+
+Batch encrypt all .lua files:
+```bash
+find src -name "*.lua" -exec ./reverse --encrypt --key "mykey" --signature "SIG" -w {} \;
+```
+
+### Decrypt files
+
 Decrypt a file with a known key:
 ```bash
 ./reverse --decrypt --key "key" encrypted.luac
