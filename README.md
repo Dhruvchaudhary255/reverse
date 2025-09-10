@@ -1,16 +1,14 @@
 # reverse
 
-`reverse` is a static analysis tool for reverse-engineering ARM64 Android/iOS binaries, focused on automatically detecting XXTEA key usage in Cocos2d-x based games.
+`reverse` finds XXTEA encryption keys in ARM64 Android/iOS Cocos apps.
 
-It works by:
-- Disassembling functions (`TraceDisasm`) and annotating ARM64 instructions with semantic meaning.
-- Tracking register state and stack objects (e.g. `std::string` built with Small String Optimization).
-- Recognizing patterns like inline vs. heap strings, member function calls, and vtable dispatch chains.
-- Flagging XOR operations that may indicate string obfuscation.
-- Extracting parameters passed into XXTEA-related functions (`jsb_set_xxtea_key`, `BaseGame::setXXTeaKey`, etc.).
-- Producing annotated listings and call findings with comments such as recovered keys/signatures.
-
-In short: run `./reverse` on a target binary, and it will trace through symbolized functions, resolve indirect/virtual calls, reconstruct `std::string` arguments, and highlight where and how XXTEA keys are set. This dramatically shortens the time needed to locate and recover encryption keys in obfuscated mobile games.
+The tool:
+- Disassembles ARM64 functions
+- Tracks register values and stack objects
+- Recognizes `std::string` patterns (inline and heap)
+- Finds calls to XXTEA functions
+- Extracts encryption keys and signatures
+- Shows annotated assembly code
 
 Special thanks to Taha Draidia for the guidance and feedback that made this proof-of-concept possible.
 
@@ -72,6 +70,28 @@ This opens an interactive viewer. Press Tab to switch between panels. Press q to
 # Creates encrypted-decrypted.ext (for other files)
 ```
 
+**Brute force key from .rodata section**:
+```bash
+# Try all strings from .rodata as potential keys
+./reverse --decrypt --bruteforce libcocos2dlua.so encrypted.luac
+
+# With signature (searches near signature first - much faster)
+./reverse --decrypt --bruteforce --signature "SIG" libcocos2dlua.so encrypted.luac
+
+# Write decrypted output to file
+./reverse --decrypt --bruteforce --signature "sig" -w libcocos2dlua.so encrypted.luac
+```
+
+Bruteforce mode:
+- Extracts all strings from the .rodata section
+- Searches near the signature first (if provided)
+- Tests each string as a key
+- Tests shifted versions too (handles offset pointers)
+- Detects gzip/zip compression
+- Validates results by checking file headers
+
+Use this when function names are stripped but the key exists in .rodata.
+
 ### Finding encrypted files
 
 **Find files with a signature** in a directory:
@@ -86,33 +106,32 @@ This opens an interactive viewer. Press Tab to switch between panels. Press q to
 
 ### About signatures
 
-Cocos2d-x games that use `ResourcesDecode.cpp` may prepend a signature to encrypted files. This signature acts as a magic number to identify encrypted content. The signature is not part of the XXTEA algorithm itself - it's added by the game's `ResourcesDecode.cpp` implementation.
+Some Cocos2d-x games add a signature to encrypted files. The signature marks which files are encrypted.
 
-When a file has a signature:
-1. The signature bytes appear at the start of the file
-2. The actual XXTEA-encrypted data follows immediately after
-3. During decryption, the signature is stripped and the remaining bytes are decrypted
+How signatures work:
+1. The signature appears at the start of the file
+2. The encrypted data follows the signature
+3. The tool strips the signature before decrypting
 
-Common signatures are short strings (3-10 bytes). The game checks for this signature before attempting decryption, allowing it to mix encrypted and unencrypted assets in the same directory.
+Signatures are usually 3-10 bytes. Games use them to mix encrypted and plain files in one folder.
 
 For a reference implementation, see: [ResourcesDecode.cpp](https://github.com/yisiyidian/bbdc_k12/blob/ff52887bb43119826721b55f69537c28c28a4e74/tools/pack_files/ResourcesDecode.cpp)
 
 ## How it works
 
-The tool:
+Steps:
+1. Load the binary and find entry points
+2. Disassemble ARM64 code
+3. Track register values
+4. Find XXTEA function calls
+5. Extract keys and signatures
 
-1. Loads the binary and finds entry points (JNI_OnLoad, app init functions)
-2. Disassembles ARM64 code and tracks register values
-3. Recognizes std::string construction patterns
-4. Identifies calls to XXTEA setter functions
-5. Extracts the key and signature parameters
-
-The analysis handles:
-- Virtual function calls through vtables
-- Inline strings (Small String Optimization)
-- Heap-allocated strings
-- Member function calling conventions
-- PLT/GOT indirection
+The tool handles:
+- Virtual function calls
+- Inline strings (SSO)
+- Heap strings
+- Member functions
+- PLT/GOT jumps
 
 ## Output format
 
@@ -125,7 +144,7 @@ The tool shows:
 
 ## Examples
 
-Find keys in a game binary:
+Find keys in a Cocos library:
 ```bash
 ./reverse libcocos2djs.so --no-tui
 ```
@@ -151,16 +170,25 @@ Batch decrypt files with signature:
   done
 ```
 
+Batch decrypt using find:
+```bash
+# Decrypt all .luac files
+find assets -name "*.luac" -exec ./reverse --decrypt --key "KEY" --signature "SIGNATURE" -w {} \;
+
+# Without signature
+find assets -name "*.luac" -exec ./reverse --decrypt --key "KEY" -w {} \;
+```
+
 ## Limitations
 
-- ARM64 only (no x86 or ARMv7)
+- ARM64 only (no x86 or ARMv7
 - Static analysis only (no runtime debugging)
 
 ## Author
 
 Anthony Zboralski
-- GitHub: [@gatopeich](https://github.com/gatopeich)
-- X: [@gatopeich](https://x.com/gatopeich)
+- GitHub: [@zboralski](https://github.com/zboralski)
+- X: [@zboralski](https://x.com/zboralski)
 
 ## License
 

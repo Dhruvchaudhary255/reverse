@@ -2746,6 +2746,7 @@ func init() {
 	rootCmd.Flags().BoolP("write", "w", false, "Write decrypted output to file (.lua for .luac, .js for .jsc)")
 	rootCmd.Flags().Bool("find-signature", false, "Find all files in directory with given signature")
 	rootCmd.Flags().BoolP("recursive", "r", false, "Search recursively in subdirectories")
+	rootCmd.Flags().Bool("bruteforce", false, "Brute force XXTEA key from rodata strings (use with --decrypt)")
 
 	rootCmd.AddCommand(runCmd)
 }
@@ -2868,9 +2869,20 @@ reverse -d /path/to/binary
 			key, _ := cmd.Flags().GetString("key")
 			signature, _ := cmd.Flags().GetString("signature")
 			writeFile, _ := cmd.Flags().GetBool("write")
+			bruteforce, _ := cmd.Flags().GetBool("bruteforce")
+			
+			if bruteforce {
+				// Extract .so file from first argument
+				soPath := args[0]
+				encryptedPath := ""
+				if len(args) > 1 {
+					encryptedPath = args[1]
+				}
+				return runBruteforce(soPath, encryptedPath, signature, writeFile)
+			}
 			
 			if key == "" {
-				return fmt.Errorf("--key is required when using --decrypt")
+				return fmt.Errorf("--key is required when using --decrypt (unless using --bruteforce)")
 			}
 			
 			return runDecrypt(absPath, key, signature, writeFile)
@@ -3173,6 +3185,308 @@ func MaybePrependStdin(prompt string) (string, error) {
 		return prompt, err
 	}
 	return string(bts) + "\n\n" + prompt, nil
+}
+
+// runBruteforce attempts to find the XXTEA key by trying all strings from rodata
+func runBruteforce(soPath, encryptedPath, signature string, writeToFile bool) error {
+	// Open the ELF file
+	file, err := elf.Open(soPath)
+	if err != nil {
+		return fmt.Errorf("failed to open ELF file: %v", err)
+	}
+	defer file.Close()
+
+	// Find .rodata section
+	rodata := file.Section(".rodata")
+	if rodata == nil {
+		return fmt.Errorf(".rodata section not found")
+	}
+
+	// Read rodata section
+	rodataData, err := rodata.Data()
+	if err != nil {
+		return fmt.Errorf("failed to read .rodata: %v", err)
+	}
+
+	// Look for signature in rodata if provided
+	var signatureOffset int = -1
+	if signature != "" {
+		sigBytes := []byte(signature)
+		for i := 0; i <= len(rodataData)-len(sigBytes); i++ {
+			if bytes.Equal(rodataData[i:i+len(sigBytes)], sigBytes) {
+				signatureOffset = i
+				fmt.Printf("Found signature %q at offset 0x%x in .rodata\n", signature, i)
+				break
+			}
+		}
+	}
+
+	var potentialKeys []string
+	
+	// If we found the signature, first try strings within 1KB of it
+	if signatureOffset >= 0 && encryptedPath != "" {
+		fmt.Println("Searching for keys near signature...")
+		
+		// Define search window (1KB before and after signature)
+		searchStart := max(0, signatureOffset-1024)
+		searchEnd := min(len(rodataData), signatureOffset+1024)
+		
+		// Extract strings only in the nearby region
+		var nearbyKeys []string
+		start := searchStart
+		for i := searchStart; i < searchEnd; i++ {
+			if rodataData[i] == 0 {
+				if i > start {
+					str := string(rodataData[start:i])
+					if utf8.ValidString(str) && isPrintableString([]byte(str)) && len(str) >= 4 {
+						nearbyKeys = append(nearbyKeys, str)
+					}
+				}
+				start = i + 1
+			}
+		}
+		
+		fmt.Printf("Found %d strings near signature, trying them first...\n", len(nearbyKeys))
+		
+		// Try nearby keys first
+		data, err := os.ReadFile(encryptedPath)
+		if err != nil {
+			return fmt.Errorf("failed to read encrypted file: %v", err)
+		}
+		
+		sigBytes := []byte(signature)
+		for i, key := range nearbyKeys {
+			if i%10 == 0 {
+				fmt.Printf("Trying nearby key %d/%d...\r", i, len(nearbyKeys))
+			}
+			
+			// Try the key and all its shifted versions
+			for shift := 0; shift < len(key); shift++ {
+				tryKey := key[shift:]
+				if len(tryKey) < 4 {
+					break
+				}
+				
+				var decrypted []byte
+				
+				// Try with signature
+				if len(data) >= len(sigBytes) && bytes.Equal(data[:len(sigBytes)], sigBytes) {
+					decrypted, err = xxtea.Decrypt(data[len(sigBytes):], []byte(tryKey))
+				} else {
+					decrypted, err = xxtea.DecryptWithSignature(data, []byte(tryKey), sigBytes)
+				}
+				
+				if err == nil && isValidDecryption(decrypted, signature) {
+					if shift > 0 {
+						fmt.Printf("\n✓ Found key near signature (shifted by %d): %q\n", shift, tryKey)
+					} else {
+						fmt.Printf("\n✓ Found key near signature: %q\n", tryKey)
+					}
+					
+					// Check for and handle compression
+					decrypted, err = detectAndDecompress(decrypted, encryptedPath)
+					if err != nil {
+						fmt.Printf("Warning: decompression failed: %v\n", err)
+					}
+					
+					// Output result
+					outputDecrypted(decrypted, encryptedPath, writeToFile)
+					return nil
+				}
+			}
+		}
+		
+		fmt.Println("\nNo key found near signature, scanning entire .rodata...")
+	}
+	
+	// Extract all null-terminated strings from rodata
+	start := 0
+	for i := 0; i < len(rodataData); i++ {
+		if rodataData[i] == 0 {
+			if i > start {
+				str := string(rodataData[start:i])
+				// Check if it's a valid UTF-8 string with printable characters
+				if utf8.ValidString(str) && isPrintableString([]byte(str)) {
+					potentialKeys = append(potentialKeys, str)
+				}
+			}
+			start = i + 1
+		}
+	}
+
+	fmt.Printf("Found %d total strings in .rodata\n", len(potentialKeys))
+
+	// If encrypted file path provided, try to decrypt it
+	if encryptedPath != "" {
+		data, err := os.ReadFile(encryptedPath)
+		if err != nil {
+			return fmt.Errorf("failed to read encrypted file: %v", err)
+		}
+
+		sigBytes := []byte(signature)
+		
+		// Try each string as a key (including shifted versions)
+		for i, key := range potentialKeys {
+			if i%100 == 0 {
+				fmt.Printf("Trying key %d/%d...\r", i, len(potentialKeys))
+			}
+			
+			// Try the key and all its shifted versions
+			for shift := 0; shift < len(key); shift++ {
+				tryKey := key[shift:]
+				if len(tryKey) < 4 {
+					break
+				}
+				
+				var decrypted []byte
+				var err error
+				
+				// Try with signature if provided
+				if signature != "" {
+					// Check if file starts with signature
+					if len(data) >= len(sigBytes) && bytes.Equal(data[:len(sigBytes)], sigBytes) {
+						// Strip signature and decrypt
+						decrypted, err = xxtea.Decrypt(data[len(sigBytes):], []byte(tryKey))
+					} else {
+						// Try DecryptWithSignature
+						decrypted, err = xxtea.DecryptWithSignature(data, []byte(tryKey), sigBytes)
+					}
+				} else {
+					decrypted, err = xxtea.Decrypt(data, []byte(tryKey))
+				}
+				
+				if err != nil {
+					continue
+				}
+				
+				// Check if decrypted data is valid
+				if isValidDecryption(decrypted, signature) {
+					if shift > 0 {
+						fmt.Printf("\n✓ Found key (shifted by %d): %q\n", shift, tryKey)
+					} else {
+						fmt.Printf("\n✓ Found key: %q\n", tryKey)
+					}
+					
+					// Check for and handle compression
+					decrypted, err = detectAndDecompress(decrypted, encryptedPath)
+					if err != nil {
+						fmt.Printf("Warning: decompression failed: %v\n", err)
+					}
+					
+					// Output result
+					outputDecrypted(decrypted, encryptedPath, writeToFile)
+					
+					return nil
+				}
+			}
+		}
+		
+		fmt.Printf("\nNo valid key found among %d strings\n", len(potentialKeys))
+	} else {
+		// Just list potential keys
+		fmt.Println("Potential XXTEA keys from .rodata:")
+		for _, s := range potentialKeys {
+			// Filter to show only reasonable key candidates (4-64 chars)
+			if len(s) >= 4 && len(s) <= 64 {
+				fmt.Printf("  %q\n", s)
+			}
+		}
+	}
+	
+	return nil
+}
+
+
+// isValidDecryption checks if decrypted data looks valid
+func isValidDecryption(data []byte, signature string) bool {
+	if len(data) == 0 {
+		return false
+	}
+	
+	// Check for signature if provided
+	if signature != "" && len(data) >= len(signature) {
+		if string(data[:len(signature)]) == signature {
+			return true
+		}
+	}
+	
+	// Check for common file headers
+	if len(data) >= 4 {
+		// Lua bytecode header
+		if data[0] == 0x1b && data[1] == 0x4c && data[2] == 0x75 && data[3] == 0x61 {
+			return true
+		}
+		// JavaScript (might start with function or var)
+		if utf8.Valid(data[:min(100, len(data))]) {
+			start := string(data[:min(100, len(data))])
+			if strings.Contains(start, "function") || strings.Contains(start, "var ") || 
+			   strings.Contains(start, "const ") || strings.Contains(start, "let ") {
+				return true
+			}
+		}
+		// Gzip header
+		if data[0] == 0x1f && data[1] == 0x8b {
+			return true
+		}
+		// ZIP header
+		if data[0] == 0x50 && data[1] == 0x4b {
+			return true
+		}
+	}
+	
+	// Check if it's mostly printable text
+	printableCount := 0
+	sampleSize := min(1000, len(data))
+	for i := 0; i < sampleSize; i++ {
+		if data[i] >= 32 && data[i] <= 126 || data[i] == '\n' || data[i] == '\r' || data[i] == '\t' {
+			printableCount++
+		}
+	}
+	
+	// If more than 80% is printable, consider it valid
+	return float64(printableCount)/float64(sampleSize) > 0.8
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func abs(a int) int {
+	if a < 0 {
+		return -a
+	}
+	return a
+}
+
+func outputDecrypted(decrypted []byte, encryptedPath string, writeFile bool) {
+	if writeFile {
+		outputPath := encryptedPath
+		if pathpkg.Ext(outputPath) == ".luac" {
+			outputPath = outputPath[:len(outputPath)-1] // Remove 'c'
+		} else if pathpkg.Ext(outputPath) == ".jsc" {
+			outputPath = outputPath[:len(outputPath)-1] // Remove 'c'
+		} else {
+			outputPath += ".decrypted"
+		}
+		
+		if err := os.WriteFile(outputPath, decrypted, 0644); err != nil {
+			fmt.Printf("Error: failed to write file: %v\n", err)
+		} else {
+			fmt.Printf("Decrypted file written to: %s\n", outputPath)
+		}
+	} else {
+		fmt.Print(string(decrypted))
+	}
 }
 
 func ResolveCwd(cmd *cobra.Command) (string, error) {
