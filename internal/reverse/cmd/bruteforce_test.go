@@ -69,6 +69,27 @@ func TestShiftedKeyDetection(t *testing.T) {
 			signature:   "SIG",
 			description: "Key at the end of a long string with signature",
 		},
+		{
+			name:        "Single character key",
+			storedKey:   "A",
+			actualKey:   "A",
+			signature:   "",
+			description: "Single character key",
+		},
+		{
+			name:        "Two character key with signature",
+			storedKey:   "AB",
+			actualKey:   "AB",
+			signature:   "XX",
+			description: "Two character key with signature",
+		},
+		{
+			name:        "Three character key",
+			storedKey:   "ABC",
+			actualKey:   "ABC",
+			signature:   "",
+			description: "Three character key",
+		},
 	}
 	
 	for _, tc := range testCases {
@@ -88,13 +109,8 @@ func TestShiftedKeyDetection(t *testing.T) {
 			var decryptedData []byte
 			
 			// Try the stored key and all its suffixes
-			for i := 0; i < len(tc.storedKey); i++ {
+			for i := 0; i <= len(tc.storedKey); i++ {
 				tryKey := tc.storedKey[i:]
-				
-				// Skip if key is too short
-				if len(tryKey) < 3 {
-					continue
-				}
 				
 				// Try decryption
 				var decrypted []byte
@@ -228,12 +244,12 @@ func TestBruteforceNegativeCases(t *testing.T) {
 			description:    "Should fail when no keys are available",
 		},
 		{
-			name:           "Key too short after shift",
-			encryptKey:     "ABC",
-			availableKeys:  []string{"XABC"}, // After shift, only "ABC" remains (too short)
+			name:           "Key not matching after shift",
+			encryptKey:     "XYZ",
+			availableKeys:  []string{"ABCDEF"}, // No shift produces "XYZ"
 			signature:      "",
 			shouldFind:     false,
-			description:    "Should fail when shifted key becomes too short (<4 chars)",
+			description:    "Should fail when no shift produces the correct key",
 		},
 		{
 			name:           "Corrupted encrypted data",
@@ -266,11 +282,8 @@ func TestBruteforceNegativeCases(t *testing.T) {
 			found := false
 			for _, key := range tc.availableKeys {
 				// Try the key and its shifted versions
-				for shift := 0; shift < len(key); shift++ {
+				for shift := 0; shift <= len(key); shift++ {
 					tryKey := key[shift:]
-					if len(tryKey) < 4 {
-						break
-					}
 					
 					var decrypted []byte
 					if tc.signature != "" && tc.signature != "WRONGSIG" {
@@ -332,8 +345,8 @@ func TestBruteforceEdgeCases(t *testing.T) {
 		{
 			name:        "Single character strings",
 			rodataData:  []byte{'A', 0x00, 'B', 0x00, 'C', 0x00},
-			description: "Should skip single character strings",
-			expectKeys:  0,
+			description: "Should extract single character strings",
+			expectKeys:  3, // Now we extract "A", "B", "C"
 		},
 		{
 			name:        "Non-printable characters",
@@ -374,7 +387,7 @@ func extractNullTerminatedStrings(data []byte) []string {
 		if data[i] == 0 {
 			if i > start {
 				str := string(data[start:i])
-				if isPrintableString([]byte(str)) && len(str) >= 3 {
+				if isPrintableString([]byte(str)) {
 					result = append(result, str)
 				}
 			}

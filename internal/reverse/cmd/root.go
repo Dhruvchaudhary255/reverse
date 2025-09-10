@@ -3238,13 +3238,16 @@ func runBruteforce(soPath, encryptedPath, signature string, writeToFile bool) er
 			if rodataData[i] == 0 {
 				if i > start {
 					str := string(rodataData[start:i])
-					if utf8.ValidString(str) && isPrintableString([]byte(str)) && len(str) >= 4 {
+					if utf8.ValidString(str) && isPrintableString([]byte(str)) {
 						nearbyKeys = append(nearbyKeys, str)
 					}
 				}
 				start = i + 1
 			}
 		}
+		
+		// Also try empty string as a key
+		nearbyKeys = append(nearbyKeys, "")
 		
 		fmt.Printf("Found %d strings near signature, trying them first...\n", len(nearbyKeys))
 		
@@ -3263,9 +3266,6 @@ func runBruteforce(soPath, encryptedPath, signature string, writeToFile bool) er
 			// Try the key and all its shifted versions
 			for shift := 0; shift < len(key); shift++ {
 				tryKey := key[shift:]
-				if len(tryKey) < 4 {
-					break
-				}
 				
 				var decrypted []byte
 				
@@ -3313,6 +3313,9 @@ func runBruteforce(soPath, encryptedPath, signature string, writeToFile bool) er
 			start = i + 1
 		}
 	}
+	
+	// Also try empty string as a key
+	potentialKeys = append(potentialKeys, "")
 
 	fmt.Printf("Found %d total strings in .rodata\n", len(potentialKeys))
 
@@ -3334,9 +3337,6 @@ func runBruteforce(soPath, encryptedPath, signature string, writeToFile bool) er
 			// Try the key and all its shifted versions
 			for shift := 0; shift < len(key); shift++ {
 				tryKey := key[shift:]
-				if len(tryKey) < 4 {
-					break
-				}
 				
 				var decrypted []byte
 				var err error
